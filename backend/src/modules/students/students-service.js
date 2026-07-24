@@ -1,4 +1,4 @@
-const { ApiError, sendAccountVerificationEmail } = require("../../utils");
+﻿const { ApiError, sendAccountVerificationEmail } = require("../../utils");
 const { findAllStudents, findStudentDetail, findStudentToSetStatus, addOrUpdateStudent, deleteStudentById } = require("./students-repository");
 const { findUserById } = require("../../shared/repository");
 
@@ -32,20 +32,25 @@ const getStudentDetail = async (id) => {
 const addNewStudent = async (payload) => {
     const ADD_STUDENT_AND_EMAIL_SEND_SUCCESS = "Student added and verification email sent successfully.";
     const ADD_STUDENT_AND_BUT_EMAIL_SEND_FAIL = "Student added, but failed to send verification email.";
-    try {
-        const result = await addOrUpdateStudent(payload);
-        if (!result.status) {
-            throw new ApiError(500, result.message);
-        }
 
-        try {
-            await sendAccountVerificationEmail({ userId: result.userId, userEmail: payload.email });
-            return { message: ADD_STUDENT_AND_EMAIL_SEND_SUCCESS };
-        } catch (error) {
-            return { message: ADD_STUDENT_AND_BUT_EMAIL_SEND_FAIL }
-        }
+    let result;
+    try {
+        result = await addOrUpdateStudent(payload);
     } catch (error) {
+        // Unexpected DB/connection failure - message intentionally generic
         throw new ApiError(500, "Unable to add student");
+    }
+
+    if (!result.status) {
+        // Business validation failure (e.g. "Email already exists") - surface the real reason
+        throw new ApiError(400, result.message);
+    }
+
+    try {
+        await sendAccountVerificationEmail({ userId: result.userId, userEmail: payload.email });
+        return { message: ADD_STUDENT_AND_EMAIL_SEND_SUCCESS };
+    } catch (error) {
+        return { message: ADD_STUDENT_AND_BUT_EMAIL_SEND_FAIL }
     }
 }
 
@@ -74,7 +79,16 @@ const setStudentStatus = async ({ userId, reviewerId, status }) => {
 const deleteStudent = async (id) => {
     await checkStudentId(id);
 
-    const affectedRow = await deleteStudentById(id);
+    let affectedRow;
+    try {
+        affectedRow = await deleteStudentById(id);
+    } catch (error) {
+        if (error.code === "23503") { // Postgres: foreign_key_violation
+            throw new ApiError(400, "Cannot delete student with existing records (e.g. leave requests). Please remove or reassign them first.");
+        }
+        throw error;
+    }
+
     if (affectedRow <= 0) {
         throw new ApiError(500, "Unable to delete student");
     }
